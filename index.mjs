@@ -1,5 +1,4 @@
 import TelegramBot from "node-telegram-bot-api";
-import Anthropic from "@anthropic-ai/sdk";
 import { execSync } from "child_process";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
 import { join } from "path";
@@ -11,11 +10,31 @@ const GITHUB_REPO = "GraceMentored25/clc-traiteur-dashboard";
 const GITHUB_BRANCH = "main";
 const ALLOWED_USER = process.env.ALLOWED_TELEGRAM_USER; // optional whitelist
 
-const client = new Anthropic({
-  defaultHeaders: {
-    "X-Amz-Bedrock-Bearer-Token": process.env.AWS_BEARER_TOKEN_BEDROCK,
-  },
-});
+async function askBedrockClaude(prompt) {
+  const token = process.env.AWS_BEARER_TOKEN_BEDROCK;
+  const response = await fetch(
+    "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-sonnet-4-5/invoke",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        anthropic_version: "bedrock-2023-05-31",
+        max_tokens: 8192,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    }
+  );
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Bedrock error ${response.status}: ${err.slice(0, 200)}`);
+  }
+  const data = await response.json();
+  return data.content[0].text;
+}
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
@@ -48,15 +67,6 @@ IMPORTANT :
 - Ne jamais modifier package.json, next.config.ts, tsconfig.json sauf si explicitement demandé
 - Garder le style de code existant (TypeScript strict, Tailwind classes, etc.)`;
 
-async function askClaude(userMessage) {
-  const response = await client.messages.create({
-    model: "anthropic.claude-sonnet-4-5",
-    max_tokens: 8192,
-    system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: userMessage }],
-  });
-  return response.content[0].text;
-}
 
 function parseResponse(text) {
   const files = [];
@@ -121,7 +131,7 @@ bot.on("message", async (msg) => {
   const thinking = await bot.sendMessage(chatId, "⏳ Analyse en cours...");
 
   try {
-    const claudeResponse = await askClaude(text);
+    const claudeResponse = await askBedrockClaude(text);
     const { files, summary } = parseResponse(claudeResponse);
 
     if (files.length === 0) {
